@@ -1,0 +1,14 @@
+title: Dashboard
+icp: ICP
+logoText: Dashboard
+categories:
+  - name: "Github"
+    icon: "fa-brands fa-github"
+    items:
+      - name: "Trilium"
+        subtitle: "Trilium Note"
+        logo: "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/trilium.svg"
+        tag: "github"
+        keywords: "self hosted github note trilium"
+        url: "https://github.com/TriliumNext/Trilium/"
+        target: "_blank"
