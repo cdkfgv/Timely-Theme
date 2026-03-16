@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<% 
+   const siteName = subRoot.note.getLabelValue("siteName") || "Dashboard";
+     // 读取 YAML 配置（你的格式：categories → links）
+   const yamlContent = subRoot.note.getVisibleChildNotes()[0].getContent();
+   %>
+<html lang="zh-CN">
+   <head>
+      <meta charset="UTF-8">
+      <meta name="referrer" content="no-referrer">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title><%= `${siteName}` %></title>
+      <meta name="theme-color" content="#5986D1">
+      <% if (note.hasRelation("shareFavicon")) { %>
+      <link rel="shortcut icon" href="api/notes/<%= note.getRelation("shareFavicon").value %>/download">
+      <% } else { %>
+      <link rel="shortcut icon" href="../favicon.ico">
+      <% } %>
+      <script src="https://cdn.jsdmirror.com/npm/js-yaml@4.1.1/dist/js-yaml.min.js"></script>
+      <% for (const jsRelation of note.getRelations("shareJs")) { %>
+      <script type="module" src="api/notes/<%= jsRelation.value %>/download"></script>
+      <% } %>
+      <link rel="stylesheet" href="https://cdn.jsdmirror.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+      <link rel="stylesheet" href="https://npm.elemecdn.com/lxgw-wenkai-screen-webfont/style.css" media="print" onload="this.media='all'">
+      <% for (const cssRelation of note.getRelations("shareCss")) { %>
+      <link href="api/notes/<%= cssRelation.value %>/download" rel="stylesheet">
+      <% } %>
+   </head>
+   <body>
+      <!-- 顶部栏：左上角折叠按钮 + 右上角搜索框 -->
+      <header class="header">
+         <div class="header-left">
+            <div class="logo" id="toggleLogo">
+               <i class="fa-solid fa-compass"></i>
+               <span class="logo-text"><%= `${siteName}` %></span>
+            </div>
+         </div>
+         <div class="header-right">
+            <div class="search-box">
+               <i class="fa-solid fa-search search-icon"></i>
+               <input type="text" id="search" placeholder="搜索链接... (Ctrl+K)">
+            </div>
+            <button id="themeToggle" class="theme-toggle" title="切换主题">
+            <i class="fa-solid fa-moon theme-icon"></i>
+            </button>
+         </div>
+      </header>
+      <!-- 主布局：左侧分类 + 右侧内容 -->
+      <div class="container">
+         <aside class="sidebar" id="sidebar">
+            <div class="category-list" id="categoryList">
+               <a class="category-item active" data-category="all">
+               <i class="fa-solid fa-layer-group"></i>
+               <span>全部链接</span>
+               <span class="category-count" id="allCount"></span>
+               </a>
+            </div>
+            <div class="stats-simple" id="statsInfo">
+               <span class="stats-text" id="statsText">
+               📁 <span id="categoryCount">0</span> 分类 • 🔗 <span id="linkCount">0</span> 链接
+               </span>
+            </div>
+         </aside>
+         <main class="content">
+            <div class="content-header" id="contentHeader" style="display: none;">
+               <div class="content-header-left">
+                  <i class="fa-solid fa-folder" id="contentHeaderIcon"></i>
+                  <h2 class="content-header-title" id="contentHeaderTitle"></h2>
+               </div>
+            </div>
+            <div class="card-grid" id="cardContainer"></div>
+         </main>
+         <button id="backToTop" class="back-to-top" title="回到顶部">
+         <i class="fa-solid fa-arrow-up"></i>
+         </button>
+      </div>
+      <footer class="site-footer">
+         <div class="footer-content">
+            <div class="footer-copyright">
+               <span>Powered by Trilium</span>
+               <span class="footer-separator">|</span>
+               <span>Copyright © 2025-2026. All Rights Reserved.</span>
+            </div>
+            <div class="footer-icp" id="footerIcp">
+               <a href="https://beian.miit.gov.cn/" target="_blank"></a>
+            </div>
+         </div>
+      </footer>
+      <script>
+         // ===== 配置数据 =====
+         const config = jsyaml.load(`<%- yamlContent %>`);
+         
+         window.navConfig = config;
+         const defaultTheme = 'dark';
+         if (!localStorage.getItem('theme')) {
+           localStorage.setItem('theme', defaultTheme);
+         }
+         document.addEventListener('DOMContentLoaded', () => {
+           if (window.initNavApp) {
+             window.initNavApp();
+           }
+         });
+      </script>
+   </body>
+</html>
