@@ -17,14 +17,11 @@
       <link rel="shortcut icon" href="../favicon.ico">
       <% } %>
       <script src="https://cdn.jsdmirror.com/npm/js-yaml@4.1.1/dist/js-yaml.min.js"></script>
-      <% for (const jsRelation of note.getRelations("shareJs")) { %>
-      <script type="module" src="api/notes/<%= jsRelation.value %>/download"></script>
-      <% } %>
+      <script src="https://cdn.jsdmirror.com/gh/cdkfgv/timely-theme/Timely-Theme/timely-theme.min.js"></script>
+      
       <link rel="stylesheet" href="https://cdn.jsdmirror.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
       <link rel="stylesheet" href="https://npm.elemecdn.com/lxgw-wenkai-screen-webfont/style.css" media="print" onload="this.media='all'">
-      <% for (const cssRelation of note.getRelations("shareCss")) { %>
-      <link href="api/notes/<%= cssRelation.value %>/download" rel="stylesheet">
-      <% } %>
+      <link href="https://cdn.jsdmirror.com/gh/cdkfgv/timely-theme/Timely-Theme/timely-theme.min.css" rel="stylesheet">
    </head>
    <body>
       <!-- 顶部栏：左上角折叠按钮 + 右上角搜索框 -->
@@ -82,7 +79,7 @@
                <span>Copyright © 2025-2026. All Rights Reserved.</span>
             </div>
             <div class="footer-icp" id="footerIcp">
-               <a href="https://beian.miit.gov.cn/" target="_blank"></a>
+               <a href="https://beian.miit.gov.cn/" target="_blank">豫ICP备2024090100号-1</a>
             </div>
          </div>
       </footer>
