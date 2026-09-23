@@ -1,413 +1,646 @@
-window.initNavApp = function() {
-  const config = window.navConfig;
+'use strict';
 
-  // 配置验证
-  function validateConfig() {
-    const errors = [];
+/* ================================================================
+   工具函数
+================================================================ */
+const MONTHS = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
 
-    // 检查基本配置
-    if (!config) {
-      errors.push('配置文件未找到');
-      return errors;
+function escHtml(str) {
+  return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function isDark() {
+  return document.documentElement.classList.contains('dark');
+}
+
+/* ================================================================
+   Vue 依赖（在 DOMContentLoaded 后从 window.Vue 获取）
+================================================================ */
+var ref, reactive, computed, watch, onMounted, nextTick, createApp;
+
+/* ================================================================
+   全局共享状态（先用普通对象，DOMContentLoaded 后增强为响应式）
+================================================================ */
+const G = {
+  route: { name: 'home', params: {} },
+  isPostPage: window.BLOG_DATA?.isPostPage ?? false,
+  searchOpen: null,
+  lightboxSrc: null,
+  lightboxOpen: null,
+  // TOC 数据（文章详情页使用）
+  tocHeadings: [],
+  tocActive: '',
+  tocTree: [],
+  tocCollapsed: false,
+};
+
+/* ================================================================
+   组件定义工厂（确保所有属性在创建时完整）
+================================================================ */
+
+/* ================================================================
+   SkeletonItem 骨架屏
+================================================================ */
+function createSkeletonItem() {
+  return {
+    template: getTemplate('tpl-skeleton-item')
+  };
+}
+
+/* ================================================================
+   PostCard 文章卡片
+================================================================ */
+function createPostCard() {
+  return {
+    props: ['post'],
+    computed: {
+      cover() {
+        const c = this.post.cover;
+        return (c && /^https?:\/\//i.test(c)) ? c : '';
+      },
+      tagList() {
+        return (this.post.tags || []).slice(0, 3);
+      },
+    },
+    template: getTemplate('tpl-post-card')
+  };
+}
+
+/* ================================================================
+   HomeView 首页
+================================================================ */
+function createHomeView() {
+  return {
+    components: { 'skeleton-item': createSkeletonItem(), 'post-card': createPostCard() },
+    setup() {
+      const loading = ref(true);
+      const posts = computed(() => window.BLOG_DATA?.posts || []);
+      onMounted(() => {
+        setTimeout(() => loading.value = false, 300);
+      });
+      return { loading, posts };
+    },
+    template: getTemplate('tpl-home-view')
+  };
+}
+
+/* ================================================================
+   ArchiveView 归档
+================================================================ */
+function createArchiveView() {
+  return {
+    setup() {
+      const posts = computed(() => window.BLOG_DATA?.posts || []);
+      const yearsMap = computed(() => {
+        const map = {};
+        posts.value.forEach(p => {
+          const d = new Date(p.date);
+          const y = d.getFullYear().toString();
+          const m = d.getMonth();
+          if (!map[y]) map[y] = {};
+          if (!map[y][m]) map[y][m] = [];
+          map[y][m].push(p);
+        });
+        const sorted = {};
+        Object.keys(map).sort((a, b) => b - a).forEach(y => sorted[y] = map[y]);
+        return sorted;
+      });
+      return { posts, yearsMap, MONTHS };
+    },
+    template: getTemplate('tpl-archive-view')
+  };
+}
+
+/* ================================================================
+   TagsView 标签总览
+================================================================ */
+function createTagsView() {
+  return {
+    setup() {
+      const posts = computed(() => window.BLOG_DATA?.posts || []);
+      const tags = computed(() => {
+        const map = {};
+        posts.value.forEach(p => (p.tags || []).forEach(t => map[t] = (map[t] || 0) + 1));
+        return Object.keys(map).sort((a, b) => map[b] - map[a]).map(name => ({ name, count: map[name] }));
+      });
+      return { tags };
+    },
+    template: getTemplate('tpl-tags-view')
+  };
+}
+
+/* ================================================================
+   TagView 标签文章列表
+================================================================ */
+function createTagView() {
+  return {
+    components: { 'post-card': createPostCard() },
+    setup() {
+      const tag = computed(() => G.route.params.tag || '');
+      const posts = computed(() => window.BLOG_DATA?.posts || []);
+      const filtered = computed(() => posts.value.filter(p => (p.tags || []).includes(tag.value)));
+      return { tag, filtered };
+    },
+    template: getTemplate('tpl-tag-view')
+  };
+}
+
+/* ================================================================
+   CategoryView 分类文章列表
+================================================================ */
+function createCategoryView() {
+  return {
+    components: { 'post-card': createPostCard() },
+    setup() {
+      const cat = computed(() => G.route.params.cat || '');
+      const posts = computed(() => window.BLOG_DATA?.posts || []);
+      const filtered = computed(() => posts.value.filter(p => p.category === cat.value));
+      return { cat, filtered };
+    },
+    template: getTemplate('tpl-category-view')
+  };
+}
+
+/* ================================================================
+   AboutView 关于页
+================================================================ */
+function createAboutView() {
+  return {
+    setup() {
+      const blogger = computed(() => window.BLOG_DATA?.blogger || {});
+      return { blogger };
+    },
+    template: getTemplate('tpl-about-view')
+  };
+}
+
+/* ================================================================
+   NotFoundView 404
+================================================================ */
+const NotFoundView = {
+  template: getTemplate('tpl-not-found-view')
+};
+
+/* ================================================================
+   AppHeader 导航栏
+================================================================ */
+const AppHeader = {
+  emits: ['toggle-search'],
+  setup() {
+    const site = computed(() => window.BLOG_DATA?.site || {});
+    const routeName = computed(() => G.route.name);
+    const isDarkMode = ref(isDark());
+    const catOpen = ref(false);
+    const posts = computed(() => window.BLOG_DATA?.posts || []);
+    const cats = computed(() => {
+      const map = {};
+      posts.value.forEach(p => { if (p.category) map[p.category] = (map[p.category] || 0) + 1; });
+      return Object.keys(map).sort().map(name => ({ name, count: map[name] }));
+    });
+
+    function toggleTheme() {
+      const dark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('theme', dark ? 'dark' : 'light');
+      isDarkMode.value = dark;
+      const light = document.getElementById('prism-light');
+      const dark2 = document.getElementById('prism-dark');
+      if (light && dark2) { light.disabled = dark; dark2.disabled = !dark; }
+      // 控制深色背景层
+      const darkBg = document.getElementById('dark-bg');
+      if (darkBg) darkBg.classList.toggle('hidden', !dark);
     }
 
-    if (!config.categories || !Array.isArray(config.categories)) {
-      errors.push('categories 配置缺失或格式错误');
-      return errors;
+    onMounted(() => {
+      const light = document.getElementById('prism-light');
+      const dark2 = document.getElementById('prism-dark');
+      if (light && dark2) { light.disabled = isDarkMode.value; dark2.disabled = !isDarkMode.value; }
+      // 初始化深色背景层
+      const darkBg = document.getElementById('dark-bg');
+      if (darkBg) darkBg.classList.toggle('hidden', !isDarkMode.value);
+      document.addEventListener('click', () => catOpen.value = false);
+    });
+
+    return { site, routeName, isDarkMode, catOpen, cats, toggleTheme };
+  },
+  template: getTemplate('tpl-app-header')
+};
+
+/* ================================================================
+   AppSidebar 侧边栏
+================================================================ */
+const AppSidebar = {
+  setup() {
+    const blogger = computed(() => window.BLOG_DATA?.blogger || {});
+    const tagsOpen = ref(true);
+    const posts = computed(() => window.BLOG_DATA?.posts || []);
+    const tagList = computed(() => {
+      const map = {};
+      posts.value.forEach(p => (p.tags || []).forEach(t => map[t] = (map[t] || 0) + 1));
+      return Object.keys(map).sort((a, b) => map[b] - map[a]).map(name => ({ name, count: map[name] }));
+    });
+
+    function scrollTo(id) {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
     }
 
-    if (config.categories.length === 0) {
-      errors.push('categories 为空，请添加至少一个分类');
+    return { blogger, tagsOpen, tagList, G, scrollTo };
+  },
+  template: getTemplate('tpl-app-sidebar')
+};
+
+/* ================================================================
+   AppFooter 页脚
+================================================================ */
+const AppFooter = {
+  setup() {
+    const site = computed(() => window.BLOG_DATA?.site || {});
+    const blogger = computed(() => window.BLOG_DATA?.blogger || {});
+    return { site, blogger, year: new Date().getFullYear() };
+  },
+  template: getTemplate('tpl-app-footer')
+};
+
+/* ================================================================
+   PostDetailView 文章详情页
+================================================================ */
+const PostDetailView = {
+  setup() {
+    const title = computed(() => window.BLOG_DATA?.noteTitle || '');
+    const content = computed(() => window.BLOG_DATA?.content || '');
+    const detail = computed(() => window.BLOG_DATA?.postDetail || null);
+    const fiexdPages = computed(() => window.BLOG_DATA?.fiexdPages || []);
+    const isFixed = computed(() => window.BLOG_DATA.isFixed || false);
+    const contentEl = ref(null);
+    const mobileTocOpen = ref(false);
+
+    function scrollTo(id) {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
     }
 
-    // 检查每个分类
-    config.categories.forEach((category, index) => {
-      if (!category.name || typeof category.name !== 'string') {
-        errors.push(`分类 #${index + 1} 缺少 name 属性`);
-      }
+    onMounted(() => {
+      nextTick(() => {
+        if (!contentEl.value) return;
+        const headings = contentEl.value.querySelectorAll('h1, h2, h3, h4, h5');
+        
+        // 构建嵌套树结构
+        const rawHeadings = [];
+        headings.forEach((h, i) => {
+          if (!h.id) h.id = 'heading-' + i;
+          const level = parseInt(h.tagName.slice(1));
+          rawHeadings.push({ id: h.id, text: h.textContent, level, children: [], active: false, collapsed: false });
+        });
+        
+        // 更新 tocHeadings（扁平列表，用于 active 状态追踪）
+        G.tocHeadings.splice(0);
+        rawHeadings.forEach(h => G.tocHeadings.push(h));
+        
+        // 构建树
+        const root = [];
+        const stack = [{ level: 0, children: root }];
+        rawHeadings.forEach(item => {
+          while (stack.length > 1 && stack[stack.length - 1].level >= item.level) stack.pop();
+          stack[stack.length - 1].children.push(item);
+          stack.push(item);
+        });
+        
+        // 顶级超过3个默认折叠
+        G.tocCollapsed.value = root.length > 10;
+        
+        // 更新响应式数组
+        G.tocTree.splice(0, G.tocTree.length, ...root);
+        
+        if (G.tocHeadings.length >= 2) {
+          let lastHashId = '';
+          let initDone = false; // 标志位：初始化期间跳过响应
+          
+          const observer = new IntersectionObserver(entries => {
+            if (!initDone) return; // 初始化期间不响应
+            entries.forEach(entry => {
+              const heading = G.tocHeadings.find(x => x.id === entry.target.id);
+              if (heading) heading.active = entry.isIntersecting;
+              // 只在首个可见标题时更新 URL
+              if (entry.isIntersecting && entry.target.id !== lastHashId) {
+                lastHashId = entry.target.id;
+                G.tocActive.value = entry.target.id;
+                history.replaceState(null, '', '#' + entry.target.id);
+              }
+            });
+          }, { rootMargin: '-80px 0px -70% 0px' });
+          headings.forEach(h => observer.observe(h));
 
-      if (!category.items || !Array.isArray(category.items)) {
-        errors.push(`分类 "${category.name || index}" 的 items 配置缺失或格式错误`);
-        return;
-      }
+          // 初始化：根据 URL 哈希设置 active 状态
+          const initHash = window.location.hash.slice(1);
+          if (initHash) {
+            const target = G.tocHeadings.find(x => x.id === initHash);
+            if (target) {
+              G.tocHeadings.forEach(h => h.active = false);
+              target.active = true;
+              G.tocActive.value = initHash;
+            }
+            // 等待页面滚动完成后再启用 IntersectionObserver
+            setTimeout(() => { initDone = true; }, 500);
+          } else {
+            initDone = true;
+          }
+        }
 
-      if (category.items.length === 0) {
-        console.warn(`⚠️ 分类 "${category.name}" 没有链接`);
-      }
+        // Prism 语言别名映射（MIME类型 -> Prism支持的语言）
+        const langMap = {
+          'application-typescript': 'typescript',
+          'application-javascript': 'javascript',
+          'application-javascript-env-backend': 'javascript',
+          'application-x-jsp': 'markup',
+          'text/html': 'markup',
+          'application/javascript': 'javascript',
+          'text/typescript': 'typescript',
+        };
 
-      // 检查每个链接
-      category.items.forEach((item, itemIndex) => {
-        if (!item.name || typeof item.name !== 'string') {
-          errors.push(`分类 "${category.name}" 中的链接 #${itemIndex + 1} 缺少 name 属性`);
+        // 代码块增强
+        contentEl.value.querySelectorAll('pre').forEach(pre => {
+          const code = pre.querySelector('code');
+          if (!code || pre.closest('.code-block')) return;
+          const wrapper = document.createElement('div');
+          wrapper.className = 'code-block';
+          pre.parentNode.insertBefore(wrapper, pre);
+          
+          // 获取语言标识并映射
+          const rawLang = (code.className.match(/language-([\w-]+)/) || [])[1] || '';
+          const lang = langMap[rawLang] || rawLang || 'code';
+          
+          const header = document.createElement('div');
+          header.className = 'code-header';
+          header.innerHTML = '<span>' + escHtml(lang) + '</span><button class="copy-btn"><i class="fa-regular fa-copy" style="margin-right:0.25rem"></i>复制</button>';
+          pre.classList.add('rounded-b-lg', 'rounded-t-none');
+          wrapper.appendChild(header);
+          wrapper.appendChild(pre);
+          
+          // 设置正确的语言类名
+          code.className = 'language-' + lang;
+          
+          header.querySelector('.copy-btn').addEventListener('click', () => {
+            navigator.clipboard.writeText(code.textContent).then(() => {
+              header.querySelector('.copy-btn').innerHTML = '<i class="fa-solid fa-check" style="color:#22c55e;margin-right:0.25rem"></i><span style="color:#22c55e">已复制</span>';
+              setTimeout(() => header.querySelector('.copy-btn').innerHTML = '<i class="fa-regular fa-copy" style="margin-right:0.25rem"></i>复制', 2000);
+            });
+          });
+          
+          // 调用 Prism 高亮
+          window.Prism?.highlightElement(code);
+        });
+
+        // 图片灯箱
+        contentEl.value.querySelectorAll('img').forEach(img => {
+          if (img.closest('a')) return;
+          img.style.cursor = 'zoom-in';
+          img.addEventListener('click', e => {
+            G.lightboxSrc.value = img.src;
+            G.lightboxOpen.value = true;
+            e.stopPropagation();
+          });
+        });
+
+        // 外部链接新窗口打开
+        contentEl.value.querySelectorAll('a[href]').forEach(a => {
+          if (a.hostname !== window.location.hostname) {
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+          }
+        });
+      });
+    });
+
+    return { title, content, detail, isFixed, contentEl, mobileTocOpen, scrollTo, G };
+  },
+  template: getTemplate('tpl-post-detail-view')
+};
+
+/* ================================================================
+   SearchModal 搜索弹窗
+================================================================ */
+const SearchModal = {
+  setup() {
+    const searchOpen = G.searchOpen;
+    const q = ref('');
+    const selected = ref(-1);
+    const inputEl = ref(null);
+
+    const results = computed(() => {
+      const query = q.value.trim().toLowerCase();
+      if (!query) return [];
+      return (window.BLOG_DATA?.posts || []).filter(p =>
+        p.title.toLowerCase().includes(query) ||
+        (p.summary || '').toLowerCase().includes(query) ||
+        (p.tags || []).some(t => t.toLowerCase().includes(query))
+      );
+    });
+
+    function close() {
+      searchOpen.value = false;
+      q.value = '';
+      selected.value = -1;
+    }
+
+    function onKey(e) {
+      const items = results.value;
+      if (e.key === 'Escape') { close(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); selected.value = Math.min(selected.value + 1, items.length - 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); selected.value = Math.max(selected.value - 1, 0); }
+      else if (e.key === 'Enter' && selected.value >= 0) {
+        e.preventDefault();
+        const p = items[selected.value];
+        if (p) window.location.href = './' + p.id;
+        close();
+      }
+    }
+
+    onMounted(() => {
+      document.addEventListener('keydown', e => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          searchOpen.value = true;
+          nextTick(() => inputEl.value?.focus());
         }
       });
     });
 
-    return errors;
-  }
-
-  function showError(message) {
-    const container = document.getElementById('cardContainer');
-    if (container) {
-      container.innerHTML = `
-        <div class="error-state">
-          <i class="fa-solid fa-triangle-exclamation"></i>
-          <h3>配置错误</h3>
-          <p>${message}</p>
-        </div>
-      `;
-    }
-    console.error('配置错误:', message);
-  }
-
-  const validationErrors = validateConfig();
-  if (validationErrors.length > 0) {
-    showError(validationErrors.join('<br>'));
-    return;
-  }
-
-(function() {
-  const DOM = {
-    categoryList: document.getElementById('categoryList'),
-    allCount: document.getElementById('allCount'),
-    cardContainer: document.getElementById('cardContainer'),
-    search: document.getElementById('search'),
-    toggleLogo: document.getElementById('toggleLogo'),
-    sidebar: document.getElementById('sidebar'),
-    logoText: document.querySelector('.logo-text'),
-    content: document.querySelector('.content'),
-    themeToggle: document.getElementById('themeToggle'),
-    themeIcon: document.querySelector('.theme-icon'),
-    backToTopBtn: document.getElementById('backToTop'),
-    contentHeader: document.getElementById('contentHeader'),
-    contentHeaderIcon: document.getElementById('contentHeaderIcon'),
-    contentHeaderTitle: document.getElementById('contentHeaderTitle'),
-    categoryCount: document.getElementById('categoryCount'),
-    linkCount: document.getElementById('linkCount'),
-    footerIcp: document.getElementById('footerIcp')
-  };
-
-  const state = { allLinks: [], categoryMap: {} };
-
-  const utils = {
-    toggleSidebar: (isCollapsed) => {
-      DOM.sidebar.classList.toggle('collapsed', isCollapsed);
-      DOM.logoText.style.opacity = isCollapsed ? '0' : '1';
-      DOM.logoText.style.width = isCollapsed ? '0' : 'auto';
-      DOM.logoText.style.overflow = isCollapsed ? 'hidden' : 'visible';
-    },
-
-    // 获取系统主题
-    getSystemTheme: () => {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    },
-
-    // 主题切换动画
-    setTheme: (theme, animate = true) => {
-      if (animate) {
-        document.body.style.transition = 'background 0.4s ease, color 0.4s ease';
-        document.querySelector('.header').style.transition = 'background 0.4s ease, box-shadow 0.4s ease';
-        document.querySelector('.sidebar')?.style && (document.querySelector('.sidebar').style.transition = 'background 0.4s ease, box-shadow 0.4s ease');
-      }
-
-      document.documentElement.setAttribute('data-theme', theme);
-      DOM.themeIcon.className = theme === 'dark' ? 'fa-solid fa-sun theme-icon' : 'fa-solid fa-moon theme-icon';
-
-      if (animate) {
-        setTimeout(() => {
-          document.body.style.transition = '';
-          document.querySelector('.header').style.transition = '';
-        }, 400);
-      }
-    },
-
-    getIconHtml: (link) => {
-      if (link.logo) {
-        return `<img src="${link.logo}" alt="${link.name}" class="card-logo-img" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fa-solid fa-globe" style="display:none;font-size:32px;color:#6366f1;align-items:center;justify-content:center;width:48px;height:48px;"></i>`;
-      }
-      return link.icon ? `<i class="${link.icon}"></i>` : '<i class="fa-solid fa-globe"></i>';
-    },
-
-    updateContentHeader: (category) => {
-      if (category === 'all') {
-        DOM.contentHeader.style.display = 'none';
-      } else {
-        const categoryInfo = config.categories.find(c => c.name === category);
-        DOM.contentHeader.style.display = 'flex';
-        DOM.contentHeaderTitle.textContent = category;
-        DOM.contentHeaderIcon.className = categoryInfo?.icon || 'fa-solid fa-folder';
-      }
-    }
-  };
-
-    function init() {
-      // 过滤掉没有有效items的分类
-      const validCategories = config.categories.filter(cat => cat.name && cat.items && cat.items.length > 0);
-
-      if (validCategories.length === 0) {
-        DOM.cardContainer.innerHTML = '<div class="empty-state"><i class="fa-solid fa-folder-open"></i><p>暂无链接，请检查配置文件</p></div>';
-        return;
-      }
-
-      validCategories.forEach(category => {
-        state.categoryMap[category.name] = category;
-        // 过滤掉没有name的链接项
-        const validItems = category.items.filter(item => item.name);
-        validItems.forEach(link => {
-          state.allLinks.push({ ...link, category: category.name });
-        });
-      });
-
-      // 更新config.categories为有效的分类
-      config.categories = validCategories;
-
-      renderCategories();
-      renderCards(state.allLinks);
-      bindEvents();
-      initTheme();
-      checkMobile();
-      initFooterIcp();
-      initSiteInfo();
-    }
-
-    function renderCategories() {
-      config.categories.forEach(category => {
-        const item = document.createElement('a');
-        item.className = 'category-item';
-        item.dataset.category = category.name;
-        item.innerHTML = `<i class="${category.icon || 'fa-solid fa-link'}"></i><span>${category.name}</span><span class="category-count">${category.items.length}</span>`;
-        DOM.categoryList.appendChild(item);
-      });
-
-      DOM.allCount.textContent = `(${state.allLinks.length})`;
-
-      if (DOM.categoryCount && DOM.linkCount) {
-        DOM.categoryCount.textContent = config.categories.length;
-        DOM.linkCount.textContent = state.allLinks.length;
-      }
-    }
-
-    function renderCards(links, showCategoryHeader = true) {
-      DOM.cardContainer.innerHTML = '';
-
-      if (links.length === 0) {
-        DOM.cardContainer.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox"></i><p>暂无内容</p></div>';
-        return;
-      }
-
-      const groupedLinks = links.reduce((acc, link) => {
-        const category = link.category || '未分类';
-        (acc[category] = acc[category] || []).push(link);
-        return acc;
-      }, {});
-
-      Object.entries(groupedLinks).forEach(([categoryName, categoryLinks], index) => {
-        const section = createCategorySection(categoryName, categoryLinks, index, showCategoryHeader);
-        DOM.cardContainer.appendChild(section);
-      });
-    }
-
-    function createCategorySection(name, links, sectionIndex, showCategoryHeader = true) {
-      const section = document.createElement('div');
-      section.className = 'category-section';
-      section.style.cssText = `opacity:0;transform:translateY(20px);animation:fadeInUp 0.4s ease ${sectionIndex * 0.1}s forwards`;
-
-      const iconClass = state.categoryMap[name]?.icon || 'fa-solid fa-folder';
-
-      if (showCategoryHeader) {
-        section.innerHTML = `
-          <div class="category-header">
-            <div class="category-header-left">
-              <i class="${iconClass}"></i>
-              <h3 class="category-header-title">${name}</h3>
-            </div>
-          </div>
-          <div class="category-cards"></div>
-        `;
-      } else {
-        section.innerHTML = `<div class="category-cards"></div>`;
-      }
-
-      const cardsContainer = section.querySelector('.category-cards');
-      links.forEach((link, cardIndex) => {
-        cardsContainer.appendChild(createCard(link, sectionIndex, cardIndex));
-      });
-
-      return section;
-    }
-
-    function createCard(link, sectionIndex, cardIndex) {
-      const card = document.createElement('a');
-      card.className = 'card';
-      if (link.url) {
-        card.href = link.url;
-        card.target = link.target || '_blank';
-        card.rel = 'noopener noreferrer';
-      }
-      card.title = link.subtitle || link.name;
-      card.style.cssText = `opacity:0;transform:translateY(20px);animation:fadeInUp 0.3s ease ${(sectionIndex * 0.1) + (cardIndex * 0.05)}s forwards`;
-
-      const tagHtml = link.tag ? `<span class="card-tag">#${link.tag}</span>` : '';
-      const subtitleHtml = link.subtitle ? `<div class="card-desc">${link.subtitle}</div>` : '';
-
-      card.innerHTML = `
-        <div class="card-left"><div class="card-icon">${utils.getIconHtml(link)}</div></div>
-        <div class="card-middle">
-          <div class="card-title">${link.name}</div>
-          ${subtitleHtml}
-        </div>
-        <div class="card-right">${tagHtml}</div>
-      `;
-
-      return card;
-    }
-
-    function bindEvents() {
-      const isMobile = () => window.innerWidth <= 600;
-
-      DOM.categoryList.addEventListener('click', (e) => {
-        const item = e.target.closest('.category-item');
-        if (!item) return;
-
-        document.querySelectorAll('.category-item').forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-
-        const category = item.dataset.category;
-        const filteredLinks = category === 'all' ? state.allLinks : state.allLinks.filter(l => l.category === category);
-        utils.updateContentHeader(category);
-        renderCards(filteredLinks, category === 'all');
-      });
-
-      DOM.search.addEventListener('input', (e) => {
-        const keyword = e.target.value.trim().toLowerCase();
-        if (!keyword) {
-          renderCards(state.allLinks);
-          DOM.contentHeader.style.display = 'none';
-          return;
-        }
-
-        const searchedLinks = state.allLinks.filter(link => {
-          const searchText = `${link.name} ${link.subtitle || ''} ${link.keywords || ''}`.toLowerCase();
-          return searchText.includes(keyword);
-        });
-
-        renderCards(searchedLinks);
-        DOM.contentHeader.style.display = 'none';
-      });
-
-      DOM.toggleLogo.addEventListener('click', () => {
-        if (isMobile()) {
-          DOM.sidebar.classList.toggle('mobile-visible');
-        } else {
-          const isCollapsed = DOM.sidebar.classList.toggle('collapsed');
-          utils.toggleSidebar(isCollapsed);
-        }
-      });
-
-      DOM.content.addEventListener('click', () => {
-        if (isMobile() && DOM.sidebar.classList.contains('mobile-visible')) {
-          DOM.sidebar.classList.remove('mobile-visible');
-        }
-      });
-
-      DOM.themeToggle.addEventListener('click', () => {
-        // 获取当前实际显示的主题
-        const currentTheme = document.documentElement.getAttribute('data-theme');
-        let newTheme;
-        let tooltipText;
-
-        // 根据当前显示的主题切换：深色 -> 浅色 -> 深色
-        if (currentTheme === 'dark') {
-          newTheme = 'light';
-          tooltipText = '浅色模式';
-        } else {
-          newTheme = 'dark';
-          tooltipText = '深色模式';
-        }
-
-        localStorage.setItem('theme', newTheme);
-        DOM.themeToggle.title = tooltipText;
-        utils.setTheme(newTheme);
-      });
-
-      DOM.content.addEventListener('scroll', () => {
-        DOM.backToTopBtn.classList.toggle('visible', DOM.content.scrollTop > 300);
-      });
-
-      DOM.backToTopBtn.addEventListener('click', () => {
-        DOM.content.scrollTo({ top: 0, behavior: 'smooth' });
-      });
-
-      document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-          e.preventDefault();
-          DOM.search.focus();
-        }
-        if (e.key === 'Escape') {
-          if (isMobile() && DOM.sidebar.classList.contains('mobile-visible')) {
-            DOM.sidebar.classList.remove('mobile-visible');
-          }
-          if (document.activeElement === DOM.search) {
-            DOM.search.value = '';
-            DOM.search.dispatchEvent(new Event('input'));
-            DOM.search.blur();
-          }
-        }
-      });
-
-      window.addEventListener('resize', checkMobile);
-    }
-
-    function initTheme() {
-      const savedTheme = localStorage.getItem('theme');
-      let tooltipText = '深色模式';
-
-      // 如果用户没有手动设置主题，默认使用深色
-      if (!savedTheme) {
-        utils.setTheme('dark', false);
-      } else {
-        tooltipText = savedTheme === 'dark' ? '深色模式' : '浅色模式';
-        utils.setTheme(savedTheme, false);
-      }
-
-      // 设置初始tooltip
-      DOM.themeToggle.title = tooltipText;
-    }
-
-    function checkMobile() {
-      if (window.innerWidth <= 600) {
-        DOM.sidebar.classList.add('collapsed');
-      } else {
-        DOM.sidebar.classList.remove('collapsed', 'mobile-visible');
-        DOM.logoText.style.opacity = '1';
-        DOM.logoText.style.width = 'auto';
-        DOM.logoText.style.overflow = 'visible';
-      }
-    }
-
-    function initFooterIcp() {
-      if (!DOM.footerIcp) return;
-      const icpLink = DOM.footerIcp.querySelector('a');
-      if (config.icp) {
-        icpLink.textContent = config.icp;
-      } else {
-        DOM.footerIcp.style.display = 'none';
-      }
-    }
-
-    function initSiteInfo() {
-      // 设置网站标题
-      if (config.title) {
-        document.title = config.title;
-      }
-      // 设置 Logo 文字
-      if (DOM.logoText && config.title) {
-        DOM.logoText.textContent = config.logoText;
-      }
-    }
-
-    init();
-
-  window.NavApp = { config, state, utils, renderCards };
-})();
+    return { searchOpen, q, results, selected, onKey, close, inputEl };
+  },
+  template: getTemplate('tpl-search-modal')
 };
+
+/* ================================================================
+   BackToTop 回到顶部
+================================================================ */
+const BackToTop = {
+  setup() {
+    const visible = ref(false);
+    function onScroll() { visible.value = window.scrollY > 300; }
+    function scrollTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    onMounted(() => window.addEventListener('scroll', onScroll, { passive: true }));
+    return { visible, scrollTop };
+  },
+  template: getTemplate('tpl-back-to-top')
+};
+
+/* ================================================================
+   Lightbox 图片灯箱
+================================================================ */
+const Lightbox = {
+  setup() {
+    const lightboxOpen = G.lightboxOpen;
+    const lightboxSrc = G.lightboxSrc;
+    function close() { lightboxOpen.value = false; lightboxSrc.value = ''; }
+    onMounted(() => document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); }));
+    return { lightboxOpen, lightboxSrc, close };
+  },
+  template: getTemplate('tpl-lightbox')
+};
+
+/* ================================================================
+   AppRoot 主组件
+================================================================ */
+const AppRoot = {
+  components: {
+    'app-header': AppHeader,
+    'app-sidebar': AppSidebar,
+    'app-footer': AppFooter,
+    'not-found-view': NotFoundView,
+    'post-detail-view': PostDetailView,
+    'search-modal': SearchModal,
+    'back-to-top': BackToTop,
+    'lightbox': Lightbox,
+  },
+  setup() {
+    const progress = ref(0);
+    const mainEl = ref(null);
+    let viewApp = null;
+
+    function getViewComponent(name) {
+      if (G.isPostPage) return PostDetailView;
+      const map = {
+        home: createHomeView,
+        archive: createArchiveView,
+        tags: createTagsView,
+        tag: createTagView,
+        category: createCategoryView,
+        about: createAboutView,
+      };
+      const factory = map[name];
+      return factory ? factory() : NotFoundView;
+    }
+
+    function renderView() {
+      if (!mainEl.value) return;
+      const name = G.route.name;
+      const comp = getViewComponent(name);
+      
+      // 销毁旧应用
+      if (viewApp) {
+        viewApp.unmount();
+        viewApp = null;
+      }
+      
+      // 创建新应用
+      viewApp = createApp(comp);
+      viewApp.mount(mainEl.value);
+    }
+
+    function updateRoute() {
+      const h = location.hash || '';
+      if (!h || h === '#/' || h === '#') { G.route.name = 'home'; G.route.params = {}; }
+      else if (h === '#/archive') { G.route.name = 'archive'; G.route.params = {}; }
+      else if (h === '#/tags') { G.route.name = 'tags'; G.route.params = {}; }
+      else if (h === '#/about') { G.route.name = 'about'; G.route.params = {}; }
+      else {
+        const tagMatch = h.match(/^#\/tag\/(.+)$/);
+        if (tagMatch) { G.route.name = 'tag'; G.route.params = { tag: decodeURIComponent(tagMatch[1]) }; }
+        else {
+          const catMatch = h.match(/^#\/category\/(.+)$/);
+          if (catMatch) { G.route.name = 'category'; G.route.params = { cat: decodeURIComponent(catMatch[1]) }; }
+          else { G.route.name = 'notfound'; G.route.params = {}; }
+        }
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function updateProgress() {
+      const scrollTop = window.scrollY;
+      const docH = document.documentElement.scrollHeight - window.innerHeight;
+      progress.value = docH > 0 ? Math.min(100, (scrollTop / docH) * 100) : 0;
+    }
+
+    onMounted(() => {
+      updateRoute();
+      // 初始渲染
+      nextTick(() => {
+        renderView();
+        // URL 包含哈希时滚动到对应位置
+        if (window.location.hash) {
+          nextTick(() => {
+            const id = window.location.hash.slice(1);
+            const el = document.getElementById(id);
+            if (el) el.scrollIntoView({ behavior: 'smooth' });
+          });
+        }
+      });
+      
+      window.addEventListener('hashchange', () => {
+        updateRoute();
+        renderView();
+      });
+      window.addEventListener('scroll', updateProgress, { passive: true });
+      watch(() => G.route.name, name => {
+        const siteName = window.BLOG_DATA?.site?.name || '';
+        const titles = { home: siteName, archive: '归档', tags: '标签', about: '关于', notfound: '404' };
+        if (name in titles) document.title = titles[name] + (siteName ? ' - ' + siteName : '');
+      });
+    });
+
+    return { G, progress, mainEl };
+  },
+};
+
+/* ================================================================
+   启动
+================================================================ */
+
+// Vue 3 x-template: 从 <template id="xxx"> 读取 innerHTML
+function getTemplate(id) {
+  const el = document.getElementById(id);
+  if (!el) {
+    console.error('Template not found:', id);
+    return '<div style="color:red">Template missing: ' + id + '</div>';
+  }
+  return el.innerHTML || '<div style="color:red">Template empty: ' + id + '</div>';
+}
+
+// AppRoot 模板在 getTemplate 就绪后赋值
+AppRoot.template = getTemplate('tpl-app-root');
+
+document.addEventListener('DOMContentLoaded', () => {
+  const VueAPI = window.Vue;
+  ref = VueAPI.ref;
+  reactive = VueAPI.reactive;
+  computed = VueAPI.computed;
+  watch = VueAPI.watch;
+  onMounted = VueAPI.onMounted;
+  nextTick = VueAPI.nextTick;
+  createApp = VueAPI.createApp;
+
+  // G 相关属性需要在 Vue 加载后转为响应式
+  G.tocHeadings = reactive([]);
+  G.tocTree = reactive([]);
+  G.route = reactive(G.route);
+  G.searchOpen = ref(false);
+  G.lightboxSrc = ref('');
+  G.lightboxOpen = ref(false);
+  G.tocActive = ref('');
+  // tocCollapsed 和 tocTree 用 reactive 确保深度追踪
+  G.tocCollapsed = reactive({ value: false });
+  G.tocTree = reactive([]);
+
+  const app = createApp(AppRoot);
+  app.mount('#app');
+});
